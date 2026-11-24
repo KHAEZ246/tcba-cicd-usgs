@@ -90,12 +90,7 @@ def upload_file_to_blob(
         }
 
     try:
-        container_client = client.get_container_client(container)
-        if not container_client.exists():
-            logger.info("Membuat container baru di Azure: %s", container)
-            container_client.create_container()
-
-        blob_client = container_client.get_blob_client(target_blob_name)
+        blob_client = client.get_blob_client(container=container, blob=target_blob_name)
         with open(local_file_path, "rb") as data:
             blob_client.upload_blob(data, overwrite=True)
 
