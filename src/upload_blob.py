@@ -1,7 +1,10 @@
 """
 upload_blob.py
 Modul integrasi Azure Blob Storage untuk menyimpan hasil batch ingestion dan transformasi data USGS.
-Mendukung mode riil (Azure SDK) dan mode Dry-Run/Mock untuk keperluan testing dan CI/CD.
+Mendukung:
+1. Autentikasi Azure Identity / OIDC (DefaultAzureCredential) menggunakan nama Storage Account (AZURE_STORAGE_ACCOUNT).
+2. Autentikasi Connection String (AZURE_STORAGE_CONNECTION_STRING).
+3. Dry-Run / Mock mode untuk testing lokal atau CI tanpa credential.
 """
 
 import logging
@@ -11,46 +14,67 @@ from typing import Optional, Dict, Any
 logger = logging.getLogger(__name__)
 
 
-def get_blob_service_client(connection_string: Optional[str] = None):
+def get_blob_service_client(
+    connection_string: Optional[str] = None,
+    storage_account: Optional[str] = None
+):
     """
-    Menginisialisasi Azure BlobServiceClient menggunakan connection string.
-    Jika azure-storage-blob tidak terinstall atau connection string kosong, mengembalikan None.
+    Menginisialisasi Azure BlobServiceClient menggunakan DefaultAzureCredential (OIDC)
+    atau Connection String.
     """
     conn_str = connection_string or os.getenv("AZURE_STORAGE_CONNECTION_STRING")
-    if not conn_str:
-        logger.warning("AZURE_STORAGE_CONNECTION_STRING tidak diset.")
-        return None
+    account_name = storage_account or os.getenv("AZURE_STORAGE_ACCOUNT")
 
-    try:
-        from azure.storage.blob import BlobServiceClient
-        client = BlobServiceClient.from_connection_string(conn_str)
-        return client
-    except ImportError:
-        logger.warning("Package 'azure-storage-blob' belum terinstall.")
-        return None
-    except Exception as e:
-        logger.error("Gagal menginisialisasi BlobServiceClient: %s", e)
-        return None
+    # 1. Coba menggunakan Connection String jika disediakan
+    if conn_str:
+        try:
+            from azure.storage.blob import BlobServiceClient
+            logger.info("Menggunakan autentikasi Azure via Connection String")
+            return BlobServiceClient.from_connection_string(conn_str)
+        except Exception as e:
+            logger.error("Gagal inisialisasi BlobServiceClient dari connection string: %s", e)
+
+    # 2. Coba menggunakan Azure Identity (DefaultAzureCredential / OIDC)
+    if account_name:
+        try:
+            from azure.identity import DefaultAzureCredential
+            from azure.storage.blob import BlobServiceClient
+            account_url = f"https://{account_name}.blob.core.windows.net"
+            logger.info("Menggunakan autentikasi Azure Identity (OIDC/DefaultAzureCredential) ke: %s", account_url)
+            credential = DefaultAzureCredential()
+            return BlobServiceClient(account_url=account_url, credential=credential)
+        except ImportError:
+            logger.warning("Package 'azure-identity' atau 'azure-storage-blob' belum terinstall.")
+        except Exception as e:
+            logger.error("Gagal inisialisasi BlobServiceClient via DefaultAzureCredential: %s", e)
+
+    logger.warning("Tidak ada credential Azure (AZURE_STORAGE_ACCOUNT / AZURE_STORAGE_CONNECTION_STRING) yang aktif.")
+    return None
 
 
 def upload_file_to_blob(
     local_file_path: str,
     container_name: Optional[str] = None,
     blob_name: Optional[str] = None,
-    connection_string: Optional[str] = None
+    connection_string: Optional[str] = None,
+    storage_account: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Mengunggah file lokal ke Azure Blob Storage.
     Jika credentials tidak tersedia, akan berjalan dalam mode DRY-RUN/MOCK
     sehingga tidak mematahkan alur CI/testing pipeline.
     """
-    container = container_name or os.getenv("AZURE_STORAGE_CONTAINER_NAME", "usgs-earthquake")
+    container = (
+        container_name
+        or os.getenv("AZURE_STORAGE_CONTAINER")
+        or os.getenv("AZURE_STORAGE_CONTAINER_NAME", "usgs-data")
+    )
     target_blob_name = blob_name or os.path.basename(local_file_path)
 
     if not os.path.exists(local_file_path):
         raise FileNotFoundError(f"File lokal tidak ditemukan: {local_file_path}")
 
-    client = get_blob_service_client(connection_string)
+    client = get_blob_service_client(connection_string, storage_account)
 
     if client is None:
         logger.info(
@@ -68,7 +92,7 @@ def upload_file_to_blob(
     try:
         container_client = client.get_container_client(container)
         if not container_client.exists():
-            logger.info("Membuat container baru: %s", container)
+            logger.info("Membuat container baru di Azure: %s", container)
             container_client.create_container()
 
         blob_client = container_client.get_blob_client(target_blob_name)
