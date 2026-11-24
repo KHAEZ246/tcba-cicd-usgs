@@ -74,6 +74,13 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID || vars.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
+      - name: Check Azure Roles & Permissions
+        run: |
+          echo "=== Info Akun Login ==="
+          az account show --output json || true
+          echo "=== Role Assignments ==="
+          az role assignment list --assignee ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }} --all --output table || true
+
       - name: Run USGS Batch Ingestion & Upload to Azure
         env:
           AZURE_STORAGE_ACCOUNT: ${{ secrets.AZURE_STORAGE_ACCOUNT || vars.AZURE_STORAGE_ACCOUNT }}

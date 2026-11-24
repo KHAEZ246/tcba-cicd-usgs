@@ -103,5 +103,31 @@ def upload_file_to_blob(
             "url": blob_client.url
         }
     except Exception as e:
+        logger.warning("Upload via Azure SDK gagal (%s). Mencoba fallback menggunakan Azure CLI...", e)
+        account = storage_account or os.getenv("AZURE_STORAGE_ACCOUNT", "tcbacicd")
+        try:
+            import subprocess
+            cmd = [
+                "az", "storage", "blob", "upload",
+                "--account-name", account,
+                "--container-name", container,
+                "--file", local_file_path,
+                "--name", target_blob_name,
+                "--overwrite"
+            ]
+            res = subprocess.run(cmd, capture_output=True, text=True)
+            if res.returncode == 0:
+                logger.info("Berhasil mengunggah file via Azure CLI fallback: %s", target_blob_name)
+                return {
+                    "status": "uploaded_via_cli",
+                    "local_file": local_file_path,
+                    "container": container,
+                    "blob_name": target_blob_name
+                }
+            else:
+                logger.error("Fallback Azure CLI juga gagal:\nSTDOUT: %s\nSTDERR: %s", res.stdout, res.stderr)
+        except Exception as cli_err:
+            logger.error("Eksekusi fallback Azure CLI mengalami exception: %s", cli_err)
+
         logger.error("Gagal mengunggah file '%s' ke Azure: %s", local_file_path, e)
         raise e
